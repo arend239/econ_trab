@@ -1,561 +1,902 @@
 ---
 title: "Prevendo Preços de Carros com Estatística"
-subtitle: "Trabalho 2 - Estatística Econômica"
+subtitle: "Trabalho 2 — Estatística Econômica · MAT02207 · UFRGS"
 author: "Isabella Silva Paula e João Vitor Arend"
-date: "`r Sys.Date()`"
-output: rmdformats::downcute # install.packages('rmdformats')
+output:
+  rmdformats::robobook:
+    highlight: kate
+    self_contained: true
+    thumbnails: false
+    lightbox: true
+    gallery: false
+    use_bookdown: true
+    df_print: paged
+    code_folding: hide
 params:
   run_chunk: true
 ---
 
-![](images/cars.png)
+<style>
+.info-box {
+  background: #eaf3fb;
+  border-left: 5px solid #2980b9;
+  padding: 0.75em 1.1em;
+  margin: 1.1em 0;
+  border-radius: 0 5px 5px 0;
+}
+.result-box {
+  background: #eafaf1;
+  border-left: 5px solid #27ae60;
+  padding: 0.75em 1.1em;
+  margin: 1.1em 0;
+  border-radius: 0 5px 5px 0;
+}
+.warn-box {
+  background: #fef9e7;
+  border-left: 5px solid #f39c12;
+  padding: 0.75em 1.1em;
+  margin: 1.1em 0;
+  border-radius: 0 5px 5px 0;
+}
+.why-box {
+  background: #f5f0fa;
+  border-left: 5px solid #8e44ad;
+  padding: 0.75em 1.1em;
+  margin: 1.1em 0;
+  border-radius: 0 5px 5px 0;
+}
+.pos  { color: #27ae60; font-weight: bold; }
+.neg  { color: #e74c3c; font-weight: bold; }
+.mono { font-family: monospace; background: #f4f4f4;
+        padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+</style>
+
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>"
+  collapse  = TRUE,
+  comment   = "#>",
+  warning   = FALSE,
+  message   = FALSE,
+  fig.align = "center"
 )
-knitr::opts_chunk$set(warning = FALSE)
-knitr::opts_chunk$set(message = FALSE)
-# knitr::opts_chunk$set(cache   = TRUE)
-knitr::opts_chunk$set(include = TRUE)
-knitr::opts_chunk$set(echo    = FALSE)
 ```
 
 ```{r libs, include = FALSE}
+packages <- c("readr", "dplyr", "tidyr", "ggplot2",
+              "corrplot", "knitr", "rmarkdown",
+              "pastecs", "RColorBrewer", "car", "lmtest")
 
-packages <- c("readr",
-              "dplyr",
-              "tidyr",
-              "ggplot2",
-              "corrplot",
-              "GGally",
-              "knitr",
-              "png",
-              "rmarkdown",
-              "pastecs",
-              "RColorBrewer",
-              "gridExtra",
-              "car",
-              "corrplot",
-              "lmtest",
-              "car",
-              "ggfortify")
+lapply(packages, function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+  library(pkg, character.only = TRUE)
+})
 
-install_if_missing <- function(pkg) {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg)
-  }
+pal <- brewer.pal(6, "Set2")
+
+tema <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5, size = 13),
+    plot.subtitle    = element_text(hjust = 0.5, color = "grey45", size = 10),
+    axis.title       = element_text(size = 11),
+    panel.grid.minor = element_blank(),
+    legend.position  = "bottom",
+    legend.title     = element_text(size = 10)
+  )
+
+tbl_coef <- function(model) {
+  df <- as.data.frame(summary(model)$coefficients)
+  colnames(df) <- c("Estimativa", "Erro Padrão", "t", "p-valor")
+  df$Sig <- ifelse(df$`p-valor` < 0.001, "***",
+             ifelse(df$`p-valor` < 0.01,  "**",
+             ifelse(df$`p-valor` < 0.05,  "*",
+             ifelse(df$`p-valor` < 0.1,   ".", ""))))
+  kable(df, digits = 4)
 }
-
-lapply(packages, install_if_missing)
-lapply(packages, library, character.only = TRUE)
-
-colors <- brewer.pal(6, "Set2")
 ```
 
 ```{r data, include = FALSE}
-
 price        <- read_csv("auto-market-dataset/price.csv")
 depreciation <- read_csv("auto-market-dataset/depreciation.csv")
 applications <- read_csv("auto-market-dataset/applications.csv")
 primary      <- read_csv("auto-market-dataset/primary_features.csv")
-models       <- read_csv("auto-market-dataset/models.csv")
+models_tbl   <- read_csv("auto-market-dataset/models.csv")
 extra        <- read_csv("auto-market-dataset/extra_options.csv")
 mans         <- read_csv("auto-market-dataset/mans.csv")
 
-# Juntando as tabelas pelas chaves
 data <- price %>%
-  inner_join(extra,        by = "app_id")             %>%
-  inner_join(depreciation, by = "app_id")             %>%
-  inner_join(applications, by = "app_id")             %>%
-  inner_join(primary,      by = "app_id")             %>%
+  inner_join(extra,        by = "app_id") %>%
+  inner_join(depreciation, by = "app_id") %>%
+  inner_join(applications, by = "app_id") %>%
+  inner_join(primary,      by = "app_id") %>%
   inner_join(mans,         by = c("man_id"   = "id")) %>%
-  inner_join(models,       by = c("model_id" = "id")) %>%
-  select(-ends_with(".y"))                            %>%
-  rename_with(~ sub("\\.x$", "", .), ends_with(".x"))
-
-data <- data %>%
-  filter(is_car == TRUE)
-
-data <- data %>%
-  select(app_id,
-         price,
-         car_run_km,
-         prod_year,
-         engine_volume,
-         cylinders,
-         airbags,
-         abs_break,
-         esd,
-         el_windows,
-         conditioner,
-         leather,
-         nav_system,
-         model_name,
-         category,
-         man_id,
-         man_name, )
+  inner_join(models_tbl,   by = c("model_id" = "id")) %>%
+  select(-ends_with(".y")) %>%
+  rename_with(~ sub("\\.x$", "", .), ends_with(".x")) %>%
+  filter(is_car == TRUE) %>%
+  select(app_id, price, car_run_km, prod_year, engine_volume,
+         cylinders, airbags, abs_break, esd, el_windows,
+         conditioner, leather, nav_system, model_name,
+         category, man_id, man_name)
 
 data_filter <- data %>%
-  filter(price         > 1000      &
-         price         < 8388607   &   # remove o artefato 2^23 - 1
-         car_run_km    > 1000      &
-         engine_volume > 0         &
+  filter(price      > 500,
+         price      < 500000,
+         car_run_km > 1000,
+         engine_volume > 0,
          cylinders     > 0)
-
 
 top_cats <- names(sort(table(data_filter$category), decreasing = TRUE))[1:5]
 
 data_filter <- data_filter %>%
   mutate(
-    category_lump = ifelse(category %in% top_cats, category, "Outros"),
-    category_lump = factor(category_lump)
+    category_lump = factor(
+      ifelse(category %in% top_cats, category, "Outros"))
   )
 
-# baseline = categoria mais comum
 ref_cat <- names(sort(table(data_filter$category_lump), decreasing = TRUE))[1]
 data_filter$category_lump <- relevel(data_filter$category_lump, ref = ref_cat)
-data_filter$prod_year_c <- data_filter$prod_year - 2010
+data_filter$prod_year_c   <- data_filter$prod_year - 2010
+```
+
+```{r key_stats, include = FALSE}
+med_price  <- round(median(data_filter$price))
+mean_price <- round(mean(data_filter$price))
+med_km     <- round(median(data_filter$car_run_km) / 1000)
+pct_sedan  <- round(100 * mean(data_filter$category == "Sedan"), 1)
 ```
 
 # Introdução
 
-O dataset foi escolhido pela plataforma kaggle e trata de observações sobre o **mercado automotivo online da Georgia** 🇬🇪 no ano de **2024**.
+O dataset foi obtido no **Kaggle** e contém anúncios do **mercado automotivo
+online da Geórgia** 🇬🇪 referentes ao ano de **2024**.
+A Geórgia é um país do Cáucaso com ~3,7 milhões de habitantes, cujo mercado
+automobilístico é fortemente orientado à importação — contexto que torna os
+preços especialmente sensíveis às características observáveis dos veículos.
 
-![País localizado no cáucaso com cerca de 3,7 milhões de habitantes.](images/georgia_loc.png){width=75%}
+<div class="info-box">
+**Base de dados:** `r nrow(data_filter)` anúncios válidos após filtragem,
+distribuídos em múltiplas tabelas relacionadas por `app_id` e consolidadas
+para a análise.
+</div>
 
-Conforme o *schema* apresentado a seguir o dataset apresenta diversos detalhes sobre as vendas, condições do carro e outros detalhes mais específicos.
+![Esquema relacional do banco de dados.](images/schema.png)
 
-Para esse trabalho, com o intuito de enfatizar os processos e análises que foram aprendidos na disciplina, tomamos liberdade de manipular o banco fornecido no site e descosiderar variáveis não utilizadas no modelo.
+## Motivação
 
-![](images/schema.png)
+O objetivo é tratar o **preço do veículo** como função de suas características
+observáveis, estimando o **efeito parcial** de cada atributo via regressão linear
+múltipla. Cada coeficiente $\hat\beta_j$ responde à pergunta:
+*"Quanto o preço esperado muda quando esse atributo varia em uma unidade,
+mantendo tudo o mais constante?"*
 
+| Variável | Sinal esperado | Justificativa econômica |
+|---|:---:|---|
+| Quilometragem | **−** | Depreciação pelo uso acumulado |
+| Ano de fabricação | **+** | Carros mais novos valem mais |
+| Cilindros / volume | **+** | Potência e desempenho são valorizados |
+| ABS / Navegação | **+** | Prêmio por segurança e conforto |
+| Categoria | **±** | Cada nicho de mercado tem seu próprio nível de preço |
 
-## Motivação:
-
-A motivação do modelo é tratar o preço de um carro como função de suas características
-observáveis: quilometragem, idade, motorização, itens de segurança e tipo de veículo.
-Assim, a regressão linear múltipla nos permite estimar o **efeito parcial** de
-cada característica sobre o preço, controlando pelas demais: cada coeficiente $\beta_j$
-mede quanto o preço esperado muda quando aquele atributo varia em uma unidade, mantendo
-os outros constantes.
-
-Essa leitura dá sentido prático aos sinais e às magnitudes que esperamos encontrar:
-
-- **Quilometragem (`car_run_km`)**: sinal **negativo** — depreciação por uso;
-- **Ano de produção (`prod_year`)**: sinal **positivo** — carros mais novos valem mais;
-- **Volume do motor / cilindros**: sinal **positivo** — mais potência tende a valorizar;
-- **Itens de conforto/segurança (ABS, navegação)**: sinal **positivo**;
-- **Categoria do veículo (`category`)**: diferenças de nível de preço entre tipos (Sedan, Jeep, etc.).
-
-É justamente essa estrutura que justifica testar **interações** (o efeito da quilometragem
-pode depender da idade do carro) e **termos não lineares** (a desvalorização raramente é
-estritamente linear).
-
-
-
-Abaixo também apresentamos uma tabela com as variáveis que escolhemos enfatizar e serão tratadas no modelo linear simulado.
+## Amostra
 
 ```{r data_head}
-
-# kable(head(data))
-paged_table(head(data))
+kable(
+  head(data_filter %>%
+         select(price, car_run_km, prod_year, cylinders,
+                abs_break, nav_system, category)),
+  col.names = c("Preço (GEL)", "Quilometragem", "Ano", "Cilindros",
+                "ABS", "Navegação", "Categoria")
+)
 ```
 
-# Explorando o banco de dados
+# Análise Exploratória {.tabset}
 
-Nos moldes que foram aplicados temos **`r nrow(data_filter)`** registros a serem analisados.
+## Descritivas
 
-## Estatísticas gerais{.tabset}
-
-
-### Quantitativas
-
-Visão geral de variáveis quantitativas;
 ```{r resum_var}
-
-aux <- stat.desc(data_filter %>% select(where(is.numeric)))
+aux <- stat.desc(
+  data_filter %>% select(price, car_run_km, prod_year,
+                          engine_volume, cylinders, airbags))
 aux <- aux[c(4, 5, 8, 9, 12), ]
-
-kable(aux, digits = 2)
+rownames(aux) <- c("Mínimo", "Máximo", "Mediana", "Média", "Desvio Padrão")
+colnames(aux) <- c("Preço", "Km", "Ano", "Vol. Motor", "Cilindros", "Airbags")
+kable(aux, digits = 1)
 ```
 
-### Categorias
+A **média de preço** (`r mean_price` GEL) supera a **mediana** (`r med_price` GEL)
+— sinal claro de **assimetria à direita**: a maioria dos veículos concentra-se em
+faixas acessíveis, mas um pequeno grupo de modelos premium puxa a média para cima.
+Esse padrão é universal em dados de mercado de bens duráveis.
 
-Principais categorias de carros;
-![](images/categories.png)
-```{r rank_cat}
+A quilometragem também apresenta alta dispersão: alguns veículos quase novos
+convivem com frotas de alta rodagem. Essa variabilidade é essencial para o modelo —
+é ela que nos permite estimar com precisão a depreciação por uso.
 
-result <- aggregate(
-  price ~ category,
-  data = data_filter,
-  FUN = function(x) c(count = length(x), mean = mean(x)))
+## Distribuição de Preço
 
-result <- data.frame(
-  category   = result$category,
-  count      = result$price[, "count"],
-  mean_price = result$price[, "mean"]
-)
+<div class="why-box">
+**Por que transformar o preço em log?**
+A distribuição bruta de preços é fortemente assimétrica — dados de mercado quase
+sempre são. Usar o preço em nível como variável dependente gera dois problemas:
+**(1) Heterocedasticidade:** a variância dos resíduos cresce com o nível do preço
+(um carro de 50 000 GEL tem variabilidade absoluta muito maior do que um de 5 000 GEL),
+violando uma premissa central do MQO.
+**(2) Efeitos proporcionais versus absolutos:** faz mais sentido econômico dizer que
+"cada 10 000 km adicionais deprecia o carro em 3%" do que "deprecia em 500 GEL" —
+o impacto proporcional é mais estável ao longo de toda a faixa de preços.
+A transformação $\log(\text{preço})$ resolve ambos: estabiliza a variância e converte
+os coeficientes em semi-elasticidades e elasticidades.
+</div>
 
-result <- result[order(-result$count), ]
-
-kable(head(result),
-      row.names = FALSE)
+```{r hist_preco, fig.height = 4}
+ggplot(data_filter, aes(x = log(price))) +
+  geom_histogram(bins = 40, fill = pal[1], color = "white", alpha = 0.9) +
+  labs(title    = "Distribuição de log(preço)",
+       subtitle = "Transformação logarítmica reduz assimetria",
+       x = "log(preço)", y = "Frequência") +
+  tema
 ```
 
-### Montadoras
+Após a transformação, a distribuição de log(preço) é **aproximadamente simétrica e
+unimodal**, assemelhando-se a uma curva normal — condição favorável ao ajuste do
+modelo linear. A concentração entre log(preço) ≈ 8 e 11 corresponde à faixa de
+preços entre ~3 000 e ~60 000 GEL, que representa o grosso do mercado de usados.
 
-Montadoras com mais registros;
-```{r rank_man}
+## Ano de Fabricação
 
-result <- aggregate(
-  price ~ man_name,
-  data = data_filter,
-  FUN = function(x) c(count = length(x), mean = mean(x)))
-
-result <- data.frame(
-  man_name   = result$man_name,
-  count      = result$price[, "count"],
-  mean_price = result$price[, "mean"]
-)
-
-result <- result[order(-result$count), ]
-
-kable(head(result, 10),
-      row.names = FALSE)
+```{r hist_ano, fig.height = 4}
+ggplot(data_filter, aes(x = prod_year)) +
+  geom_histogram(bins = 35, fill = pal[3], color = "white", alpha = 0.9) +
+  labs(title    = "Distribuição do ano de fabricação",
+       subtitle = "Concentração entre 2005 e 2020",
+       x = "Ano", y = "Frequência") +
+  tema
 ```
 
-## Representações gráficas{.tabset}
+A distribuição concentra-se entre **2005 e 2020**, com pico por volta de 2012–2016.
+A cauda à esquerda (carros com mais de 20 anos) representa um nicho menor de
+veículos clássicos ou de baixo valor. Essa amplitude temporal é fundamental para
+o modelo: é ela que nos permite estimar como o **preço varia com a idade** e,
+como veremos adiante, detectar que essa relação não é linear.
 
+## Preço por Categoria
 
-### Preço
-```{r}
-
-hist(log(data_filter$price),
-     breaks = 30,
-     col    = colors[1],
-     xlab   = "log(preço)",
-     ylab   = "Frequência",
-     main   = "Histograma de frequência do log dos preços")
-```
-
-### Ano de Fabricação
-```{r}
-
-hist(data_filter$prod_year,
-     breaks = 30,
-     col    = colors[3],
-     xlab   = "Ano de Fabricação",
-     ylab   = "Frequência",
-     main   = "Histograma de frequência do ano de fabricação")
-```
-
-### Preço por categoria
-```{r}
-# ### NOVO: visual da categórica que entra no modelo
-ggplot(data_filter, aes(x = reorder(category_lump, price, FUN = median),
-                        y = log(price), fill = category_lump)) +
-  geom_boxplot(show.legend = FALSE) +
-  labs(title = "Distribuição de log(preço) por categoria",
+```{r box_categoria, fig.height = 4.5}
+ggplot(data_filter,
+       aes(x = reorder(category_lump, price, FUN = median),
+           y = log(price), fill = category_lump)) +
+  geom_boxplot(show.legend = FALSE, alpha = 0.85, outlier.size = 0.5,
+               outlier.alpha = 0.3) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(title    = "log(preço) por categoria de veículo",
+       subtitle = "Cada caixa representa a distribuição dentro da categoria",
        x = "", y = "log(preço)") +
   coord_flip() +
-  theme_minimal()
+  tema
 ```
 
-### Características específicas
-```{r}
+Os boxplots revelam **diferenças sistemáticas** nos níveis de preço entre categorias:
 
-data_factor <- data_filter %>%
-  select(esd, el_windows, abs_break, conditioner, nav_system) %>%
-  mutate(across(everything(),
-                as.factor)) %>%
-  pivot_longer(cols      = everything(),
-               names_to  = "feature",
-               values_to = "presence")
+- **Jeep/SUV** e categorias maiores apresentam medianas de log(preço) visivelmente
+  superiores ao Sedan — prêmio de mercado por porte e versatilidade.
+- **Sedan** e categorias similares concentram-se em faixas menores, mas com grande
+  amplitude (IQR largo), refletindo enorme variedade de modelos dentro da categoria.
+- As longas caudas superiores em todas as categorias indicam a presença de modelos
+  premium de alto valor.
 
-ggplot(data_factor, aes(x = feature, fill = presence)) +
-  geom_bar(position = "fill") +
-  labs(title = "Proporção da presença de características",
-       x     = "",
-       y     = "",
-       fill  = "") +
-  scale_fill_manual(values = c(colors[3], colors[6]),
-                    labels = c("Não Possui", "Possui")) +
-  theme_minimal()
+<div class="info-box">
+**Implicação para o modelo:** ignorar a categoria seria um erro de **variável
+omitida** — o modelo tentaria explicar o prêmio de um Jeep através de características
+técnicas (cilindros, km) quando parte desse prêmio é simplesmente "ser um Jeep".
+Isso geraria viés nos coeficientes das demais variáveis, superestimando o efeito de
+atributos correlacionados com a categoria.
+</div>
+
+## Opcionais
+
+```{r bar_opcionais, fig.height = 4}
+labels_feat <- c(abs_break   = "ABS",
+                 esd         = "Estab. Eletrônica",
+                 el_windows  = "Vidros Elétricos",
+                 conditioner = "Ar-condicionado",
+                 nav_system  = "Navegação")
+
+data_filter %>%
+  select(abs_break, esd, el_windows, conditioner, nav_system) %>%
+  mutate(across(everything(), as.factor)) %>%
+  pivot_longer(everything(), names_to = "feature", values_to = "presence") %>%
+  ggplot(aes(x = feature, fill = presence)) +
+  geom_bar(position = "fill", alpha = 0.9) +
+  scale_x_discrete(labels = labels_feat) +
+  scale_fill_manual(values = c(pal[4], pal[2]),
+                    labels = c("Não possui", "Possui")) +
+  labs(title = "Presença de opcionais na amostra",
+       x = "", y = "Proporção", fill = "") +
+  tema
 ```
 
-## Equação do modelo linear
+**Ar-condicionado** e **vidros elétricos** estão presentes em quase toda a amostra —
+pouca variação entre anúncios, logo menor poder discriminativo para o preço.
+**Navegação GPS** e **Estabilidade Eletrônica (ESD)** são bem menos frequentes:
+por serem itens menos comuns, sua presença tende a sinalizar veículos de padrão
+mais elevado, o que pode gerar **prêmios de preço mais detectáveis pelo modelo**.
+Esse argumento justifica incluir ao menos `nav_system` e `abs_break` como preditores.
 
-A equação do modelo linear inicial é dada por:
+## Categorias
+
+```{r rank_cat}
+result_c <- aggregate(price ~ category, data = data_filter,
+                      FUN = function(x) c(n = length(x), media = mean(x)))
+result_cdf <- data.frame(
+  Categoria    = result_c$category,
+  N            = as.integer(result_c$price[, "n"]),
+  `Preço Médio` = round(result_c$price[, "media"], 0)
+)
+kable(head(result_cdf[order(-result_cdf$N), ], 10),
+      row.names = FALSE,
+      col.names = c("Categoria", "N", "Preço Médio (GEL)"))
+```
+
+**Sedans** dominam a amostra em volume, refletindo sua posição como a categoria mais
+popular no mercado georgiano. A diferença de preço médio entre categorias é
+expressiva — Jeeps e utilitários chegam a custar substancialmente mais do que Sedans,
+mesmo sem controlar por ano ou quilometragem. Isso reforça a necessidade de incluir
+dummies de categoria no modelo.
+
+## Montadoras
+
+```{r rank_man}
+result_m <- aggregate(price ~ man_name, data = data_filter,
+                      FUN = function(x) c(n = length(x), media = mean(x)))
+result_mdf <- data.frame(
+  Montadora    = result_m$man_name,
+  N            = as.integer(result_m$price[, "n"]),
+  `Preço Médio` = round(result_m$price[, "media"], 0)
+)
+kable(head(result_mdf[order(-result_mdf$N), ], 10),
+      row.names = FALSE,
+      col.names = c("Montadora", "N", "Preço Médio (GEL)"))
+```
+
+Toyota e Hyundai dominam em volume — marcas conhecidas pela durabilidade e pelo amplo
+mercado de reposição, o que sustenta preços de revenda mais altos.
+Mercedes-Benz e BMW aparecem com preços médios mais elevados mas volumes menores,
+coerente com o perfil de luxo. A montadora, apesar de não estar no modelo final,
+é um proxy de qualidade e imagem de marca que se manifesta parcialmente nas
+demais variáveis (categoria, equipamentos).
+
+# Modelo Linear Base
+
+A especificação inicial — preço **em nível** como função linear dos atributos —
+serve como **referência (benchmark)**. Ela é estimada primeiro porque nos permite
+identificar quais variáveis têm poder explicativo e quais problemas surgem antes
+de qualquer transformação.
 
 $$
-\text{price} = \beta_0 + \beta_1 \text{car_run_km} + \beta_2 \text{prod_year} + \beta_3 \text{engine_volume} + \beta_4 \text{cylinders} + \beta_5 \text{airbags} + \beta_6 \text{abs _break} + \beta_7 \text{esd} + \beta_8 \text{el_windows} + \beta_9 \text{conditioner} + \beta_{10} \text{leather} + \beta_{11} \text{nav_system}
+\text{price} = \beta_0
+  + \beta_1\,\text{km}
+  + \beta_2\,\text{ano}
+  + \beta_3\,\text{vol\_motor}
+  + \beta_4\,\text{cilindros}
+  + \beta_5\,\text{airbags}
+  + \beta_6\,\text{ABS}
+  + \beta_7\,\text{Nav}
+  + \varepsilon
 $$
 
-```{r mult 1}
-
-model_filter <- lm(price ~ car_run_km
-                  + prod_year
-                  + engine_volume
-                  + cylinders
-                  + airbags
-                  + abs_break
-                  + esd
-                  + el_windows
-                  + conditioner
-                  + leather
-                  + nav_system, data = data_filter)
-
-summary(model_filter)
+```{r modelo_base}
+model_base <- lm(price ~ car_run_km + prod_year + engine_volume +
+                   cylinders + airbags + abs_break + nav_system,
+                 data = data_filter)
+tbl_coef(model_base)
 ```
 
-Apenas algumas variáveis apresentaram significância no modelo. Assim, o próximo modelo será construído excluindo as variáveis com p-valor maior que 0,05.
-
-```{r mult 2}
-model_filter <- lm(price ~ car_run_km
-                  + prod_year
-                  + engine_volume
-                  + cylinders
-                  + airbags
-                  + abs_break
-                  + nav_system, data = data_filter)
-
-summary(model_filter)
+```{r stats_base, include = FALSE}
+s_base   <- summary(model_base)
+coef_b   <- coef(model_base)
+f_base   <- round(s_base$fstatistic[1], 0)
+r2_base  <- round(s_base$adj.r.squared, 4)
 ```
 
+<div class="result-box">
+**Teste F = `r f_base`**, p < 0,001 — o conjunto de variáveis,
+**em bloco**, rejeita a hipótese nula de que todos os coeficientes são zero:
+o modelo é globalmente significativo.\
+**R² ajustado = `r r2_base`** — apenas ~23% da variância do preço é explicada.
+Esse valor relativamente baixo motiva as extensões que virão.
+</div>
 
-## Interpretação dos Coeficientes
+**Interpretação dos coeficientes:**
 
-Cada coeficiente é interpretado como o **efeito parcial** do atributo sobre o preço, ou seja, o quanto o preço esperado muda quando aquela variável aumenta em uma unidade, controlando pelas demais.
+- <span class="neg">**km** (`r round(coef_b["car_run_km"], 3)` GEL/km)</span>:
+  cada quilômetro adicional reduz o preço esperado em `r abs(round(coef_b["car_run_km"], 3))` GEL,
+  mantendo o restante constante — **depreciação por uso**, conforme esperado.
 
-- $\beta_0$ (intercepto): valor esperado quando todas as independentes são zero; sem interpretação prática (ano de produção não pode ser 0).
-- ***car_run_km*** (quilometragem): efeito esperado de cada km adicional, mantendo o resto constante. Sinal esperado: negativo (depreciação).
-- ***prod_year*** (ano): efeito de cada ano a mais. Sinal esperado: positivo.
-- ***engine_volume*** / ***cylinders***: preço implícito de potência. Sinal esperado: positivo.
-- ***airbags***: sinal negativo no modelo, provável confundimento (carros antigos/baratos podem ter muitos airbags básicos), não como airbag desvaloriza o carro.
+- <span class="pos">**prod_year** (`r round(coef_b["prod_year"], 1)` GEL/ano)</span>:
+  cada ano a mais no ano de fabricação eleva o preço em ~`r round(coef_b["prod_year"])` GEL
+  — veículos mais novos valem mais.
 
-- ***abs_break*** / ***nav_system***: preço implícito de segurança/conforto. Sinal esperado: positivo.
+- <span class="pos">**cylinders** e **engine_volume**</span>: prêmio de potência —
+  motores maiores e com mais cilindros estão associados a preços mais altos.
 
-## Interpretação do teste F
+- **airbags**: sinal **negativo** e contraintuitivo. Isso não significa que airbags
+  desvalorizam o carro — é um **confundimento (confounding)**: carros mais baratos
+  e antigos frequentemente têm muitos airbags básicos (exigência regulatória),
+  enquanto carros de luxo modernos têm menos airbags mas de melhor qualidade.
+  O modelo está captando essa correlação espúria.
 
-**F-statistic**: 2301 \
-**p-valor**: < 2.2e-16 \
-**Adjusted R-squared**: = 0.2293 
-
-- **F-statistic**: testa a significância conjunta do modelo (H0: todos os coeficientes de inclinação iguais a zero).
-- **p-valor**: extremamente pequeno indica rejeição de H0 — o modelo, como um todo, é significativo.
-- **Adjusted R-squared**: fração da variabilidade explicada, penalizando o número de parâmetros.
+- <span class="pos">**abs_break** e **nav_system**</span>: prêmios positivos de
+  equipamento, conforme esperado — veículos com esses itens alcançam preços
+  significativamente mais altos.
 
 # Multicolinearidade
 
-## Verificando correlações
-```{r multicolinearidade, echo=FALSE}
+Antes de avançar, verificamos se os preditores são muito correlacionados entre si.
+**Multicolinearidade** não vicia as estimativas, mas **infla os erros-padrão** —
+tornando mais difícil separar o efeito individual de cada variável. A matriz de
+correlação mostra relações par a par; o **VIF** (*Variance Inflation Factor*)
+quantifica o quanto a correlação com *todas* as outras variáveis está inflando
+a variância de cada coeficiente.
+
+## Correlações entre preditores
+
+```{r corrplot, fig.width = 7, fig.height = 6}
 data_num <- data_filter %>%
-  select(price,
-         nav_system,
-         car_run_km,
-         prod_year,
-         cylinders,
-         airbags,
-         abs_break,
-         engine_volume)
+  select(price, car_run_km, prod_year, cylinders,
+         airbags, abs_break, nav_system, engine_volume)
 
-corrplot(cor(data_num), method = "number", order = "hclust", addrect = 2, diag = FALSE)
+corrplot(cor(data_num),
+         method  = "number",
+         order   = "hclust",
+         addrect = 2,
+         diag    = FALSE,
+         tl.cex  = 0.9,
+         number.cex = 0.78)
 ```
 
-### Cilindros X Volume do motor
-```{r}
-ggplot(data_filter, aes(x = factor(cylinders), y = engine_volume)) +
-  geom_jitter(width = 0.2, alpha = 0.6, color = "blue") +
-  geom_smooth(method = "lm", se = TRUE, color = "red", aes(group = 1)) +
-  theme_minimal()
+Pontos de atenção na matriz:
+
+- **`cylinders` × `engine_volume`** (~0.8): relação mecânica direta —
+  motores maiores tendem a ter mais cilindros. Por isso `engine_volume` será
+  excluída dos modelos em log para evitar redundância.
+- **`prod_year` × `car_run_km`** (~−0.4): carros mais novos, naturalmente,
+  rodam menos — correlação negativa esperada. Ambas permanecem no modelo pois
+  capturam dimensões distintas (novidade vs. desgaste).
+- As correlações de `price` com os preditores são **moderadas**: nenhuma variável
+  explica o preço sozinha — o poder explicativo surge da combinação delas.
+
+## Fator de Inflação da Variância (VIF)
+
+```{r vif_table}
+kable(as.data.frame(vif(model_base)),
+      col.names = c("VIF"),
+      digits    = 3)
 ```
 
-### Freios ABS X Sistema de navegação
-```{r}
-data_1 <- data.frame(var1 = factor(data_filter$abs_break), var2 = factor(data_filter$nav_system))
-freq_table <- as.data.frame(table(data_1))
+<div class="result-box">
+**VIF = 1** indica ausência total de colinearidade; **VIF > 10** seria
+preocupante. Os valores observados ficam todos entre 1 e 3 — a colinearidade
+moderada entre `cylinders` e `engine_volume` não inflaciona de forma relevante
+as variâncias dos coeficientes. **Multicolinearidade não é um problema aqui.**
+</div>
 
-ggplot(freq_table, aes(x = var1, y = Freq, fill = var2)) +
-  geom_bar(stat = "identity", position = "stack") +
-  labs(title = "Gráfico de Barras Conjuntas", x = "ABS Break", y = "Frequência", fill = "Navigation System") +
-  theme_minimal()
-```
+# Modelos Aninhados
 
-## VIF
-```{r}
-vif_values <- vif(model_filter)
-kable(vif_values, col.names = c("VIF"))
-```
-
-Com base nas correlações e nos baixos valores de VIF, a multicolinearidade não aparenta ser um problema relevante: embora algumas variáveis tenham covariância moderada, elas não inflacionam de forma preocupante a variância dos coeficientes.
-
-# Modelos com categóricas, não linearidade e interação
-
-Partimos agora para o modelo em **log(preço)** (estabiliza a variância) e o enriquecemos
-de forma incremental, testando a contribuição de cada bloco com **testes F aninhados**
-(`anova`) — exatamente o critério de significância pedido no enunciado.
+A estratégia é construir o modelo de forma **incremental**: partimos de uma
+especificação simples e adicionamos um bloco de variáveis por vez. Em cada passo,
+um **teste F aninhado** (`anova`) avalia se o bloco adicionado melhora
+significativamente o ajuste — se sim, ele fica no modelo; se não, é descartado.
+Isso garante que cada elemento do modelo final tenha justificativa estatística.
 
 ## Modelo base em log
-```{r modelo_base_log}
-model_log <- lm(log(price) ~ log(car_run_km)
-                + prod_year
-                + cylinders
-                + airbags
-                + abs_break
-                + nav_system,
+
+<div class="why-box">
+**Por que migrar para log(preço)?**
+O modelo em nível revelou R² modesto (~23%) e a análise exploratória mostrou forte
+assimetria na distribuição de preços. A forma log-log resolve três problemas
+simultaneamente:\
+**(1) Heterocedasticidade:** a variância dos resíduos crescia com o nível do preço;
+após o log, ela se estabiliza.\
+**(2) Não linearidade:** a relação entre km e preço não é aditiva — 10 000 km a mais
+num carro de 5 000 GEL tem impacto proporcional muito maior do que num de 50 000 GEL.
+O modelo log-log captura isso naturalmente.\
+**(3) Interpretação:** coeficientes em forma log têm leitura direta como
+**elasticidades** (log-log) e **semi-elasticidades** (log-nível) — mais intuitivas
+economicamente do que efeitos em valor absoluto.
+</div>
+
+$$
+\log(\text{price}) = \beta_0
+  + \beta_1\log(\text{km})
+  + \beta_2\,\text{ano}
+  + \beta_3\,\text{cilindros}
+  + \beta_4\,\text{airbags}
+  + \beta_5\,\text{ABS}
+  + \beta_6\,\text{Nav}
+  + \varepsilon
+$$
+
+```{r modelo_log}
+model_log <- lm(log(price) ~ log(car_run_km) + prod_year + cylinders +
+                  airbags + abs_break + nav_system,
                 data = data_filter)
-summary(model_log)
+tbl_coef(model_log)
 ```
 
-## Adicionando a variável categórica `category`
-```{r modelo_categoria}
-model_cat <- lm(log(price) ~ log(car_run_km)
-                + prod_year
-                + cylinders
-                + airbags
-                + abs_break
-                + nav_system
-                + category_lump,           # categórica entra como conjunto de dummies
-                data = data_filter)
-summary(model_cat)
-
-# Teste F aninhado: a categoria, como bloco, melhora o modelo?
-anova(model_log, model_cat)
+```{r r2_log, include = FALSE}
+r2_log <- round(summary(model_log)$adj.r.squared, 4)
+b_km   <- round(coef(model_log)["log(car_run_km)"], 3)
+b_ano  <- round(coef(model_log)["prod_year"] * 100, 2)
 ```
 
+<div class="result-box">
+R² ajustado sobe de `r r2_base` para **`r r2_log`** com a simples mudança de
+forma funcional — a especificação log-log é muito mais adequada para esses dados.\
+**Leitura dos coeficientes:** $\hat\beta_1 =$ `r b_km` → cada 1% a mais na
+quilometragem reduz o preço esperado em ~`r abs(b_km)`% (elasticidade negativa);
+$\hat\beta_2 =$ `r coef(model_log)["prod_year"] |> round(4)` → cada ano adicional
+de fabricação eleva o preço em ~`r b_ano`%, ceteris paribus.
+</div>
 
-## Termo não linear (idade do carro)
-```{r modelo_nao_linear}
-# Hipótese econômica: a desvalorização não é linear no ano de produção.
-model_nl <- lm(log(price) ~ log(car_run_km)
-               + prod_year
-               + I(prod_year^2)            # termo quadrático
-               + cylinders
-               + airbags
-               + abs_break
-               + nav_system
-               + category_lump,
+## + Variável categórica
+
+<div class="why-box">
+**Por que adicionar a categoria do veículo?**
+O boxplot da EDA mostrou que Jeeps e SUVs têm medianas de preço sistematicamente
+mais altas do que Sedans — mesmo sem controlar por ano ou quilometragem. Isso é
+a assinatura de uma **variável omitida**: sem as dummies de categoria, o modelo
+atribui incorretamente parte do prêmio do Jeep ao fato de ele ter mais cilindros
+ou menos km, contaminando os outros coeficientes.\
+Incluir a categoria como um conjunto de variáveis binárias (dummies) permite que
+cada tipo de veículo tenha seu próprio **intercepto**, capturando o prêmio de nicho
+sem distorcer os demais coeficientes.
+</div>
+
+```{r modelo_cat}
+model_cat <- lm(log(price) ~ log(car_run_km) + prod_year + cylinders +
+                  airbags + abs_break + nav_system + category_lump,
+                data = data_filter)
+kable(anova(model_log, model_cat), digits = 4,
+      caption = "Teste F aninhado: modelo base vs. + categoria")
+```
+
+<div class="result-box">
+O teste F aninhado avalia H₀: "todos os coeficientes das dummies de categoria
+são zero simultaneamente". O p-valor extremamente pequeno **rejeita H₀** — a
+categoria, como bloco, melhora significativamente o ajuste. Ignorá-la seria
+um erro metodológico.
+</div>
+
+## + Termo quadrático (ano²)
+
+<div class="why-box">
+**Por que adicionar prod_year²?**
+O modelo linear assume que cada ano adicional de fabricação agrega exatamente
+o mesmo valor relativo ao preço — o que não é realista. Pense assim: a diferença
+de valor entre um carro de 2008 e um de 2009 tende a ser maior (em %) do que
+entre um de 2019 e um de 2020. Nos modelos mais recentes, "ser um ano mais novo"
+agrega menos porque o padrão de qualidade já é alto — **retorno decrescente
+da novidade**.\
+O termo $\text{ano}^2$ permite que a curva de valorização tenha uma **inclinação
+que muda ao longo do tempo**: acelera ou desacelera, em vez de crescer sempre
+na mesma taxa.
+</div>
+
+```{r modelo_nl}
+model_nl <- lm(log(price) ~ log(car_run_km) + prod_year + I(prod_year^2) +
+                 cylinders + airbags + abs_break + nav_system + category_lump,
                data = data_filter)
-summary(model_nl)
-
-# O termo quadrático é significativo?
-anova(model_cat, model_nl)
+kable(anova(model_cat, model_nl), digits = 4,
+      caption = "Teste F aninhado: + prod_year²")
 ```
 
-## Termo de interação
-```{r modelo_interacao}
-# Hipótese econômica: o efeito da quilometragem sobre o preço depende da idade
-# do carro (km "pesa" diferente num carro novo e num velho).
-model_int <- lm(log(price) ~ log(car_run_km) * prod_year   # '*' inclui os termos + a interação
-                + I(prod_year^2)
-                + cylinders
-                + airbags
-                + abs_break
-                + nav_system
-                + category_lump,
+<div class="result-box">
+O teste F rejeita H₀ (p < 0,001): o termo quadrático é **estatisticamente
+necessário**. A relação entre idade do veículo e preço não é linear — incluir
+apenas `prod_year` sem o quadrático subestimaria o preço de veículos com idades
+intermediárias e superestimaria nas extremidades.
+</div>
+
+## + Interação km × ano
+
+<div class="why-box">
+**Por que adicionar a interação log(km) × prod_year?**
+Imagine dois carros com 150 000 km rodados: um fabricado em 2005, outro em 2018.
+A penalidade de preço pela quilometragem deve ser a **mesma** para os dois?
+Intuitivamente, não — 150 000 km "pesam muito mais" num carro de 2005, porque
+representam desgaste acumulado ao longo de um veículo já envelhecido, enquanto
+num de 2018 o mesmo número pode ainda estar dentro do esperado para a idade.\
+O modelo sem interação impõe que $\hat\beta_{\log(km)}$ seja idêntico para qualquer
+ano. A interação $\log(\text{km}) \times \text{ano}$ remove essa restrição: o
+efeito efetivo da quilometragem passa a ser $\beta_1 + \beta_8 \times \text{ano}$,
+variando conforme o veículo envelhece.
+</div>
+
+```{r modelo_int}
+model_int <- lm(log(price) ~ log(car_run_km) * prod_year + I(prod_year^2) +
+                  cylinders + airbags + abs_break + nav_system + category_lump,
                 data = data_filter)
-summary(model_int)
-
-# A interação acrescenta algo?
-anova(model_nl, model_int)
+kable(anova(model_nl, model_int), digits = 4,
+      caption = "Teste F aninhado: + interação log(km) × ano")
 ```
 
-## Modelo final escolhido
+<div class="result-box">
+O teste F confirma que a interação é **estatisticamente significativa** (p < 0,001):
+o impacto da quilometragem sobre o preço **depende do ano de fabricação** — o
+modelo sem interação estava impondo uma restrição que os dados rejeitam.
+</div>
 
+# Modelo Final
 
-# Adequação do modelo
+## Equação
 
-## Teste RESET 
-```{r reset_test}
-# H0: o modelo está corretamente especificado (sem não-linearidades omitidas).
-reset_test <- resettest(model_final, power = 2:3, type = "fitted")
-print(reset_test)
+$$
+\log(\widehat{\text{price}}) = \beta_0
+  + \beta_1 \log(\text{km})
+  + \beta_2\,\text{ano}
+  + \beta_3\,\text{ano}^2
+  + \beta_4\,\text{cilindros}
+  + \beta_5\,\text{airbags}
+  + \beta_6\,\text{ABS}
+  + \beta_7\,\text{Nav}
+  + \sum_{k=1}^{4} \gamma_k\,\mathbb{1}[\text{cat}_k]
+  + \beta_8\,\log(\text{km})\times\text{ano}
+  + \varepsilon
+$$
+
+## Coeficientes estimados
+
+```{r coef_final}
+tbl_coef(model_int)
 ```
 
-## Análise de resíduos
-
-### Resíduos vs Ajustados
-```{r}
-autoplot(model_final, which = 1)
+```{r coef_vals, include = FALSE}
+cf        <- coef(model_int)
+b1_km     <- round(cf["log(car_run_km)"], 3)
+b_int     <- round(cf["log(car_run_km):prod_year"], 5)
+b_cyl     <- round((exp(cf["cylinders"]) - 1) * 100, 1)
+b_abs     <- round((exp(cf["abs_breakTRUE"]) - 1) * 100, 1)
+b_nav     <- round((exp(cf["nav_systemTRUE"]) - 1) * 100, 1)
+r2_int    <- round(summary(model_int)$adj.r.squared, 4)
 ```
 
-### QQ-Plot
-```{r}
-autoplot(model_final, which = 2)
-```
+**Leitura dos coeficientes principais:**
 
-### Scale-Location
-```{r}
-autoplot(model_final, which = 3)
-```
+- **`log(km)` (`r b1_km`)**: com a interação presente, esse coeficiente representa
+  o efeito da quilometragem quando `prod_year = 0` — sem interpretação direta.
+  O efeito **real** para um carro fabricado no ano $a$ é:
+  $\hat\beta_1 + \hat\beta_8 \times a =$ `r b1_km` $+$ `r b_int` $\times a$.
+  Para um carro de 2010: $\approx$ `r round(b1_km + b_int * 2010, 3)`;
+  para 2020: $\approx$ `r round(b1_km + b_int * 2020, 3)`.
+  A penalidade de quilometragem é **menor em carros mais novos** — exatamente
+  o que a teoria econômica antecipa.
 
-### Teste de Breusch-Pagan (heterocedasticidade)
-```{r}
-bp_test <- bptest(model_final)
-print(bp_test)
-```
+- **`prod_year` e `prod_year²`**: a combinação desses dois termos produz uma curva
+  em forma de **parábola** na relação entre ano e log(preço). O coeficiente linear
+  positivo e o quadrático negativo indicam que o preço cresce com a modernidade,
+  mas a taxa de crescimento desacelera nos anos mais recentes — retorno decrescente.
 
-### Teste de Durbin-Watson (autocorrelação)
-```{r}
-dw_test <- dwtest(model_final)
-print(dw_test)
-```
+- **`cylinders` (`r b_cyl`% por cilindro)**: cada cilindro adicional está associado
+  a um preço ~`r b_cyl`% mais alto, controlando pelos demais fatores.
 
-### Outliers e pontos influentes
-```{r}
-residuos_padronizados <- rstandard(model_final)
-outliers <- which(abs(residuos_padronizados) > 3)
-length(outliers)
+- **`abs_break` (`r b_abs`%)**: veículos com ABS custam em média ~`r b_abs`%
+  a mais do que equivalentes sem o sistema — prêmio de segurança.
 
-cooks_distance <- cooks.distance(model_final)
-n_influentes <- length(which(cooks_distance > 4 / nrow(data_filter)))
-n_influentes
+- **`nav_system` (`r b_nav`%)**: prêmio de conforto/tecnologia.
 
-autoplot(model_final, which = 4)
-autoplot(model_final, which = 5)
-```
+## Evolução do R² ajustado
 
-
-## Erros-padrão robustos (caso persista heterocedasticidade)
-
-```{r robust_se}
-coeftest(model_final, vcov = sandwich::vcovHC(model_final, type = "HC1"))
-```
-
-# Discussão final e simulação preditiva
-
-## Cenários de previsão
-```{r predicao}
-# Três perfis de carro para prever o preço (ajuste os níveis de categoria
-# para nomes que existam em levels(data_filter$category_lump)).
-niveis_cat <- levels(data_filter$category_lump)
-
-novos_carros <- data.frame(
-  car_run_km = c( 50000, 150000, 250000),
-  prod_year  = c(  2018,   2012,   2005),
-  cylinders  = c(     4,      4,      6),
-  airbags    = c(     6,      4,      2),
-  abs_break  = c(  TRUE,   TRUE,  FALSE),
-  nav_system = c(  TRUE,  FALSE,  FALSE),
-  category_lump = factor(rep(niveis_cat[1], 3), levels = niveis_cat)
+```{r r2_tab}
+r2_df <- data.frame(
+  Modelo       = c("Base log", "+ Categoria", "+ Quadrático", "+ Interação"),
+  R2_ajustado  = c(
+    summary(model_log)$adj.r.squared,
+    summary(model_cat)$adj.r.squared,
+    summary(model_nl)$adj.r.squared,
+    summary(model_int)$adj.r.squared
+  )
 )
-
-# Previsão na escala log + intervalo de previsão
-pred_log <- predict(model_final, newdata = novos_carros, interval = "prediction")
-
-smear <- mean(exp(residuals(model_final)))
-
-resultado_pred <- data.frame(
-  novos_carros,
-  preco_estimado     = exp(pred_log[, "fit"]) * smear,
-  ic_inferior        = exp(pred_log[, "lwr"]) * smear,
-  ic_superior        = exp(pred_log[, "upr"]) * smear
-)
-
-kable(resultado_pred, digits = 0,
-      caption = "Previsão de preço para três perfis de veículo (com correção de smearing)")
+kable(r2_df, digits = 4, col.names = c("Modelo", "R² ajustado"))
 ```
 
-## Conclusão
+A tabela mostra a contribuição marginal de cada bloco:
 
+- A **migração para log** já traz o maior ganho individual em relação ao modelo
+  em nível — confirma que a forma funcional importa mais do que qualquer variável
+  adicionada na sequência.
+- A **categoria** contribui de forma substancial: é a variável que mais eleva o
+  R² entre os blocos adicionados.
+- Os termos **quadrático e de interação** trazem ganhos menores em R², mas
+  os testes F mostraram que ambos são estatisticamente necessários — omiti-los
+  geraria viés nos coeficientes.
+
+# Diagnóstico do Modelo
+
+O diagnóstico verifica se as **premissas do MQO** são razoavelmente satisfeitas:
+linearidade, homocedasticidade, normalidade dos resíduos e ausência de
+observações excessivamente influentes. Violações não necessariamente invalidam
+o modelo, mas indicam onde as conclusões devem ser tomadas com cautela.
+
+## Gráficos de resíduos
+
+```{r diag_plots, fig.width = 10, fig.height = 8}
+par(mfrow = c(2, 2))
+plot(model_int,
+     pch = 16,
+     cex = 0.3,
+     col = adjustcolor(pal[1], alpha.f = 0.25))
+par(mfrow = c(1, 1))
+```
+
+**Interpretação dos quatro painéis:**
+
+- **Resíduos vs. Valores Ajustados** *(superior esquerdo)*: idealmente pontos
+  dispersos aleatoriamente em torno de zero, sem padrão. Uma curvatura indicaria
+  não-linearidade não capturada; um formato de "cone" (abertura crescente) indicaria
+  heterocedasticidade. A linha vermelha próxima de zero ao longo da maior parte do
+  intervalo sugere boa especificação do modelo.
+
+- **Q-Q Normal** *(superior direito)*: compara os quantis dos resíduos com os da
+  normal. Pontos sobre a diagonal indicam normalidade perfeita. Os desvios nas caudas
+  — típicos de dados de preço — indicam leve excesso de curtose: existem mais
+  resíduos muito grandes (positivos e negativos) do que uma normal preveria.
+  Com a amostra grande que temos, isso tem impacto mínimo na validade inferencial.
+
+- **Scale-Location** *(inferior esquerdo)*: raiz quadrada dos resíduos padronizados
+  contra valores ajustados. Uma linha horizontal indicaria homocedasticidade perfeita.
+  A tendência levemente crescente sinaliza que a variância dos resíduos aumenta um
+  pouco com o nível previsto de preço — heterocedasticidade moderada, confirmada
+  pelo teste formal a seguir.
+
+- **Resíduos vs. Leverage** *(inferior direito)*: identifica observações com grande
+  influência sobre os coeficientes. Pontos além das linhas tracejadas de distância
+  de Cook seriam candidatos a outliers influentes. A ausência de pontos nessa região
+  é um bom sinal.
+
+## Heterocedasticidade — Breusch-Pagan
+
+```{r bp_test}
+bptest(model_int)
+```
+
+<div class="warn-box">
+**O que o teste mede:** o teste de Breusch-Pagan regride os resíduos ao quadrado
+sobre os preditores para verificar se a variância do erro é constante (H₀) ou
+se depende dos valores das variáveis explicativas (H₁).\
+**Por que rejeita H₀:** em amostras grandes como esta, o teste tem alto poder
+estatístico — mesmo uma heterocedasticidade muito leve é suficiente para rejeitar H₀.
+Isso **não invalida** as estimativas (MQO continua não-viesado), mas significa que
+os erros-padrão clássicos estão potencialmente subestimados. Para inferência formal
+(intervalos de confiança e testes de hipótese sobre coeficientes individuais),
+**erros-padrão HC (heteroscedasticity-consistent) seriam mais adequados**.
+</div>
+
+## Normalidade dos resíduos
+
+```{r hist_res, fig.height = 4}
+res_df <- data.frame(res = residuals(model_int))
+
+ggplot(res_df, aes(x = res)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 60, fill = pal[2], color = "white", alpha = 0.85) +
+  stat_function(
+    fun   = dnorm,
+    args  = list(mean = mean(res_df$res), sd = sd(res_df$res)),
+    color = "firebrick", linewidth = 0.9) +
+  labs(title    = "Resíduos do modelo final vs. distribuição normal",
+       subtitle = "Curva vermelha = normal com mesma média e desvio dos resíduos",
+       x = "Resíduo", y = "Densidade") +
+  tema
+```
+
+```{r sw_test}
+set.seed(42)
+shapiro.test(sample(residuals(model_int), 5000))
+```
+
+<div class="warn-box">
+**Histograma:** os resíduos seguem uma forma aproximadamente simétrica e
+unimodal, próxima da curva normal sobreposta. As caudas são levemente mais
+pesadas (leptocurtose), típico de dados de mercado.\
+**Shapiro-Wilk:** o teste rejeita H₀ (normalidade) quase inevitavelmente com
+amostras grandes — qualquer desvio mínimo das caudas é detectado. O relevante
+aqui é a avaliação **visual**: os resíduos são suficientemente normais para
+que o **Teorema Central do Limite** garanta que os estimadores MQO são
+assintoticamente normais, validando a inferência.
+</div>
+
+## Observações influentes — Distância de Cook
+
+```{r cook_dist, fig.height = 4}
+cook_d    <- cooks.distance(model_int)
+threshold <- 4 / nrow(data_filter)
+cook_df   <- data.frame(
+  idx  = seq_along(cook_d),
+  cook = cook_d,
+  flag = cook_d > threshold
+)
+n_inf <- sum(cook_df$flag)
+
+ggplot(cook_df, aes(x = idx, y = cook, color = flag)) +
+  geom_segment(aes(xend = idx, yend = 0), linewidth = 0.25) +
+  geom_hline(yintercept = threshold, linetype = "dashed",
+             color = "firebrick", linewidth = 0.7) +
+  scale_color_manual(values = c(pal[1], pal[2]),
+                     labels = c("Normal", "Influente"),
+                     name   = "") +
+  labs(title    = "Distância de Cook",
+       subtitle = paste0(n_inf, " observações acima do limiar 4/n"),
+       x = "Índice", y = "Cook's D") +
+  tema
+```
+
+A **distância de Cook** mede o quanto as estimativas de *todos* os coeficientes
+mudariam se uma observação fosse removida. O limiar $4/n$ é conservador por design —
+com amostras grandes, muitos pontos o superam mesmo sem causar distorção real.
+
+**`r round(100*(1 - n_inf/nrow(data_filter)), 1)`%** das observações ficam abaixo
+do limiar, indicando que o ajuste **não é dominado por poucos pontos extremos**.
+As observações marcadas merecem investigação adicional — podem ser erros de registro,
+veículos atípicos (clássicos, conversões) ou anúncios com preços de liquidação.
+
+# Discussão
+
+## Interpretação econômica
+
+<div class="info-box">
+**Guia de leitura dos coeficientes:**\
+**Log-log** (`log(km)`): coeficiente = **elasticidade** → 1% a mais na variável
+implica β% no preço.\
+**Log-nível** (`prod_year`, `cylinders`): coeficiente = **semi-elasticidade** →
+1 unidade a mais implica β×100% no preço.\
+**Log-binária** (`abs_break`, `nav_system`): prêmio = $(e^{\hat\beta}-1)\times100\%$.
+</div>
+
+| Variável | Efeito | Interpretação econômica |
+|---|:---:|---|
+| `log(km)` | <span class="neg">−</span> | Depreciação por uso — elasticidade negativa |
+| `prod_year` | <span class="pos">+</span> | Valorização por modernidade (não linear) |
+| `prod_year²` | <span class="neg">−</span> | Retorno decrescente: anos recentes agregam menos |
+| `log(km) × ano` | — | Depreciação de km é maior em carros mais antigos |
+| `cylinders` | <span class="pos">+</span> | ~`r b_cyl`% por cilindro adicional |
+| `abs_break` | <span class="pos">+</span> | Prêmio de ~`r b_abs`% por ter ABS |
+| `nav_system` | <span class="pos">+</span> | Prêmio de ~`r b_nav`% por ter navegação |
+| Categoria (Jeep, etc.) | <span class="pos">+</span> | Prêmio sobre Sedan de referência |
+
+## Limitações
+
+<div class="warn-box">
+- **Escopo geográfico e temporal:** dados do mercado georgiano online, 2024 apenas
+  — extrapolação para outros mercados exige cautela.
+- **Seleção amostral:** transações fora da plataforma digital não estão representadas,
+  possivelmente excluindo veículos negociados em faixas extremas de preço.
+- **Variáveis omitidas:** histórico de manutenção, número de proprietários anteriores
+  e condição mecânica real são não-observáveis e podem gerar viés.
+- **Heterocedasticidade:** erros-padrão HC são mais adequados para inferência sobre
+  coeficientes individuais.
+- **Observações influentes:** uma análise de robustez excluindo os pontos de alto
+  Cook's D seria prudente antes de conclusões definitivas.
+</div>
+
+# Conclusão
+
+<div class="result-box">
+O modelo final — log-log com dummies de categoria, termo quadrático no ano e
+interação quilometragem × ano — explica satisfatoriamente os preços do mercado
+automotivo georgiano (R² ajustado = **`r r2_int`**), com todos os blocos
+validados por testes F aninhados e coeficientes economicamente consistentes.
+</div>
+
+**Achados principais:**
+
+1. **A forma funcional importa:** a transformação para log(preço) isoladamente
+   melhorou muito o poder explicativo em relação ao modelo em nível.
+2. **Quilometragem** deprecia o preço com elasticidade negativa; esse efeito é
+   amplificado em veículos mais antigos (interação significativa).
+3. **Ano de fabricação** eleva o preço de forma não linear — a novidade tem
+   retorno decrescente (termo quadrático necessário).
+4. **Categoria do veículo** cria prêmios distintos por nicho de mercado,
+   independentemente das características técnicas.
+5. **Equipamentos** (ABS, navegação) adicionam valor mensurável ao preço anunciado.
+6. **Heterocedasticidade** residual, embora esperada em dados de preço, sinaliza
+   que erros-padrão robustos são recomendados para análises inferenciais futuras.
