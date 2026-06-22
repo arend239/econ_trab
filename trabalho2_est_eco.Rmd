@@ -145,6 +145,8 @@ med_km     <- round(median(data_filter$car_run_km) / 1000)
 pct_sedan  <- round(100 * mean(data_filter$category == "Sedan"), 1)
 ```
 
+**Grupo:** Isabella Silva Paula e João Vitor Arend.
+
 # Introdução
 
 O dataset foi obtido no **Kaggle** e contém anúncios do **mercado automotivo
@@ -530,8 +532,11 @@ b_ano  <- round(coef(model_log)["prod_year"] * 100, 2)
 ```
 
 <div class="result-box">
-R² ajustado sobe de `r r2_base` para **`r r2_log`** com a simples mudança de
-forma funcional — a especificação log-log é muito mais adequada para esses dados.\
+O R² ajustado do modelo em log é **`r r2_log`** — note que esse valor não é
+diretamente comparável ao do modelo em nível (`r r2_base`), pois cada R² mede
+a proporção da variância de uma variável dependente diferente (preço vs. log do
+preço). O que podemos afirmar é que os diagnósticos de resíduos (heterocedasticidade,
+linearidade) são substancialmente melhores na forma log.\
 **Leitura dos coeficientes:** $\hat\beta_1 =$ `r b_km` → cada 1% a mais na
 quilometragem reduz o preço esperado em ~`r abs(b_km)`% (elasticidade negativa);
 $\hat\beta_2 =$ `r coef(model_log)["prod_year"] |> round(4)` → cada ano adicional
@@ -592,9 +597,10 @@ kable(anova(model_cat, model_nl), digits = 4,
 
 <div class="result-box">
 O teste F rejeita H₀ (p < 0,001): o termo quadrático é **estatisticamente
-necessário**. A relação entre idade do veículo e preço não é linear — incluir
-apenas `prod_year` sem o quadrático subestimaria o preço de veículos com idades
-intermediárias e superestimaria nas extremidades.
+necessário**. A relação entre ano de fabricação e log(preço) é **convexa**: o ganho
+de preço por cada ano adicional de modernidade é crescente. Um modelo apenas linear
+enviesaria o coeficiente do ano para cima, gerando previsões excessivamente altas
+para veículos novos e excessivamente baixas para os mais antigos.
 </div>
 
 ## + Interação km × ano
@@ -654,10 +660,20 @@ tbl_coef(model_int)
 cf        <- coef(model_int)
 b1_km     <- round(cf["log(car_run_km)"], 3)
 b_int     <- round(cf["log(car_run_km):prod_year"], 5)
+b_year    <- round(cf["prod_year"], 5)
+b_year2   <- round(cf["I(prod_year^2)"], 7)
 b_cyl     <- round((exp(cf["cylinders"]) - 1) * 100, 1)
 b_abs     <- round((exp(cf["abs_breakTRUE"]) - 1) * 100, 1)
 b_nav     <- round((exp(cf["nav_systemTRUE"]) - 1) * 100, 1)
 r2_int    <- round(summary(model_int)$adj.r.squared, 4)
+eff_km_2010 <- round(b1_km + b_int * 2010, 3)
+eff_km_2020 <- round(b1_km + b_int * 2020, 3)
+km_newer  <- if (b_int > 0) "menor" else "maior"
+desc_year2 <- if (b_year2 < 0) {
+  "negativo confirma retorno decrescente: o ganho de preço por modernidade desacelera nos anos mais recentes"
+} else {
+  "positivo indica retorno crescente: cada ano adicional de fabricação agrega proporcionalmente mais valor em carros mais recentes do que nos mais antigos"
+}
 ```
 
 **Leitura dos coeficientes principais:**
@@ -666,15 +682,14 @@ r2_int    <- round(summary(model_int)$adj.r.squared, 4)
   o efeito da quilometragem quando `prod_year = 0` — sem interpretação direta.
   O efeito **real** para um carro fabricado no ano $a$ é:
   $\hat\beta_1 + \hat\beta_8 \times a =$ `r b1_km` $+$ `r b_int` $\times a$.
-  Para um carro de 2010: $\approx$ `r round(b1_km + b_int * 2010, 3)`;
-  para 2020: $\approx$ `r round(b1_km + b_int * 2020, 3)`.
-  A penalidade de quilometragem é **menor em carros mais novos** — exatamente
-  o que a teoria econômica antecipa.
+  Para um carro de 2010: $\approx$ `r eff_km_2010`;
+  para 2020: $\approx$ `r eff_km_2020`.
+  A penalidade de quilometragem é **`r km_newer` em carros mais novos**.
 
-- **`prod_year` e `prod_year²`**: a combinação desses dois termos produz uma curva
-  em forma de **parábola** na relação entre ano e log(preço). O coeficiente linear
-  positivo e o quadrático negativo indicam que o preço cresce com a modernidade,
-  mas a taxa de crescimento desacelera nos anos mais recentes — retorno decrescente.
+- **`prod_year` e `prod_year²`** ($\hat\beta_2 =$ `r b_year`; $\hat\beta_3 =$ `r b_year2`):
+  a combinação desses dois termos produz uma curva em forma de **parábola** na relação
+  entre ano e log(preço).
+  <!-- O coeficiente quadrático `r desc_year2`. -->
 
 - **`cylinders` (`r b_cyl`% por cilindro)**: cada cilindro adicional está associado
   a um preço ~`r b_cyl`% mais alto, controlando pelos demais fatores.
@@ -701,9 +716,9 @@ kable(r2_df, digits = 4, col.names = c("Modelo", "R² ajustado"))
 
 A tabela mostra a contribuição marginal de cada bloco:
 
-- A **migração para log** já traz o maior ganho individual em relação ao modelo
-  em nível — confirma que a forma funcional importa mais do que qualquer variável
-  adicionada na sequência.
+- Dentro dos modelos log (comparação válida, pois todos têm o mesmo Y), o maior
+  ganho individual vem da **categoria** — reforça que ignorá-la geraria viés de
+  variável omitida nos demais coeficientes.
 - A **categoria** contribui de forma substancial: é a variável que mais eleva o
   R² entre os blocos adicionados.
 - Os termos **quadrático e de interação** trazem ganhos menores em R², mas
@@ -856,8 +871,8 @@ implica β% no preço.\
 |---|:---:|---|
 | `log(km)` | <span class="neg">−</span> | Depreciação por uso — elasticidade negativa |
 | `prod_year` | <span class="pos">+</span> | Valorização por modernidade (não linear) |
-| `prod_year²` | <span class="neg">−</span> | Retorno decrescente: anos recentes agregam menos |
-| `log(km) × ano` | — | Depreciação de km é maior em carros mais antigos |
+| `prod_year²` | <span class="pos">+</span> | Retorno crescente: cada ano adicional agrega mais valor nos veículos mais modernos |
+| `log(km) × ano` | — | Depreciação de km é maior em carros mais novos |
 | `cylinders` | <span class="pos">+</span> | ~`r b_cyl`% por cilindro adicional |
 | `abs_break` | <span class="pos">+</span> | Prêmio de ~`r b_abs`% por ter ABS |
 | `nav_system` | <span class="pos">+</span> | Prêmio de ~`r b_nav`% por ter navegação |
@@ -892,9 +907,9 @@ validados por testes F aninhados e coeficientes economicamente consistentes.
 1. **A forma funcional importa:** a transformação para log(preço) isoladamente
    melhorou muito o poder explicativo em relação ao modelo em nível.
 2. **Quilometragem** deprecia o preço com elasticidade negativa; esse efeito é
-   amplificado em veículos mais antigos (interação significativa).
-3. **Ano de fabricação** eleva o preço de forma não linear — a novidade tem
-   retorno decrescente (termo quadrático necessário).
+   amplificado em veículos mais novos (interação significativa).
+3. **Ano de fabricação** eleva o preço de forma não linear — a relação é convexa
+   e a valorização tem retorno crescente (termo quadrático necessário).
 4. **Categoria do veículo** cria prêmios distintos por nicho de mercado,
    independentemente das características técnicas.
 5. **Equipamentos** (ABS, navegação) adicionam valor mensurável ao preço anunciado.
